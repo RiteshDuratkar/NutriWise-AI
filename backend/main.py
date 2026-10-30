@@ -11,7 +11,7 @@ from database.database import SessionLocal
 
 
 # AI model imports
-from transformers import pipeline
+
 from PIL import Image
 
 from database.database import Base, engine
@@ -64,77 +64,88 @@ app.add_middleware(
 )
 
 
-# ============================================================
-# AI FOOD RECOGNITION MODEL
-# ============================================================
+# AI MODELS — LOAD ONLY WHEN REQUIRED
+food_classifier = None
+indian_food_classifier = None
+fruit_classifier = None
+fruit_preprocess = None
+fruit_config = None
+device = None
 
-print("Loading food recognition AI model...")
 
-food_classifier = pipeline(
-    "image-classification",
-    model="nateraw/food",
-)
+def load_ai_models():
+    global food_classifier, indian_food_classifier
+    global fruit_classifier, fruit_preprocess
+    global fruit_config, device
 
-indian_food_classifier = pipeline(
-    "image-classification",
-    model="dima806/indian_food_image_detection",
-)
+    if food_classifier is not None:
+        return
 
-# Fruit AI model
-import torch
-import torchvision.models as models
-from torchvision import transforms
-from huggingface_hub import hf_hub_download
-import json
+    print("Loading AI models...")
 
-fruit_config_path = hf_hub_download(
-    repo_id="bhumong/fruit-classifier-efficientnet-b0",
-    filename="config.json"
-)
+    import json
+    import torch
+    import torchvision.models as models
 
-with open(fruit_config_path, "r") as f:
-    fruit_config = json.load(f)
+    from transformers import pipeline
+    from torchvision import transforms
+    from huggingface_hub import hf_hub_download
 
-fruit_classifier = models.efficientnet_b0(weights=None)
-
-num_labels = fruit_config["num_labels"]
-
-num_ftrs = fruit_classifier.classifier[1].in_features
-
-fruit_classifier.classifier[1] = torch.nn.Linear(
-    num_ftrs,
-    num_labels
-)
-
-fruit_model_path = hf_hub_download(
-    repo_id="bhumong/fruit-classifier-efficientnet-b0",
-    filename="pytorch_model.bin"
-)
-
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
-)
-
-fruit_classifier.load_state_dict(
-    torch.load(
-        fruit_model_path,
-        map_location=device
+    food_classifier = pipeline(
+        "image-classification",
+        model="nateraw/food",
     )
-)
 
-fruit_classifier.to(device)
-fruit_classifier.eval()
-
-fruit_preprocess = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
+    indian_food_classifier = pipeline(
+        "image-classification",
+        model="dima806/indian_food_image_detection",
     )
-])
 
-print("Food recognition AI models loaded successfully!")
+    fruit_config_path = hf_hub_download(
+        repo_id="bhumong/fruit-classifier-efficientnet-b0",
+        filename="config.json"
+    )
+
+    with open(fruit_config_path, "r") as f:
+        fruit_config = json.load(f)
+
+    fruit_classifier = models.efficientnet_b0(weights=None)
+
+    num_labels = fruit_config["num_labels"]
+    num_ftrs = fruit_classifier.classifier[1].in_features
+
+    fruit_classifier.classifier[1] = torch.nn.Linear(
+        num_ftrs, num_labels
+    )
+
+    fruit_model_path = hf_hub_download(
+        repo_id="bhumong/fruit-classifier-efficientnet-b0",
+        filename="pytorch_model.bin"
+    )
+
+    device = torch.device("cpu")
+
+    fruit_classifier.load_state_dict(
+        torch.load(
+            fruit_model_path,
+            map_location=device,
+            weights_only=True
+        )
+    )
+
+    fruit_classifier.to(device)
+    fruit_classifier.eval()
+
+    fruit_preprocess = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
+
+    print("AI models loaded successfully!")
 
 app.include_router(user_router)
 app.include_router(auth_router)
@@ -154,6 +165,7 @@ async def analyze_food_image(file: UploadFile = File(...)):
     db = SessionLocal()
 
     try:
+        load_ai_models()
         # Read uploaded image
         image_bytes = await file.read()
 
